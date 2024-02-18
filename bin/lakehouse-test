@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+
+LAKEHOUSE_HOME=`cd $(dirname $0)/..; pwd`
+LIB_DIR=${LAKEHOUSE_HOME}/lib
+CONF_DIR=${LAKEHOUSE_HOME}/conf
+LOG_FILE=${CONF_DIR}/log4j2.properties
+
+# Check for the java to use
+if [[ -z $JAVA_HOME ]]; then
+    JAVA=$(which java)
+    if [ $? != 0 ]; then
+        echo "Error: JAVA_HOME not set, and no java executable found in $PATH." 1>&2
+        exit 1
+    fi
+else
+    JAVA=$JAVA_HOME/bin/java
+fi
+
+# Check ar env and load ar_env.sh
+if [[ -f "$LAKEHOUSE_HOME/conf/lakehouse_env.sh" ]]
+then
+    . "$LAKEHOUSE_HOME/conf/lakehouse_env.sh"
+fi
+
+add_maven_deps_to_classpath() {
+    MVN="mvn"
+    if [ "$MAVEN_HOME" != "" ]; then
+	    MVN=${MAVEN_HOME}/bin/mvn
+    fi
+
+# Need to generate classpath from maven pom. This is costly so generate it
+# and cache it. Save the file into our target dir so a mvn clean will get
+# clean it up and force us create a new one.
+    f="${LAKEHOUSE_HOME}/target/classpath.txt"
+    if [ ! -f "${f}" ]
+    then
+	    ${MVN} -f "${LAKEHOUSE_HOME}/pom.xml" dependency:build-classpath -DincludeScope=compile -Dmdep.outputFile="${f}" &> /dev/null
+    fi
+    CLASSPATH=${CLASSPATH}:`cat "${f}"`
+    for j in `ls ${LAKEHOUSE_HOME}/target/*.jar`; do
+        CLASSPATH="${CLASSPATH}:${j}"
+    done
+}
+
+if [ -d "${LIB_DIR}" ]; then
+    for lib in `ls ${LIB_DIR}`; do
+        CLASSPATH="${CLASSPATH}:${LIB_DIR}/${lib}"
+    done
+else
+    add_maven_deps_to_classpath
+fi
+
+# Start --add-opens options
+# '--add-opens' option is not supported in jdk8
+if [[ -z "$IS_JAVA_8" ]]; then
+  # BookKeeper: enable posix_fadvise usage and DirectMemoryCRC32Digest (https://github.com/apache/bookkeeper/pull/3234)
+  OPTS="$OPTS --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java.util.zip=ALL-UNNAMED"
+  # Netty: enable java.nio.DirectByteBuffer
+  # https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/internal/PlatformDependent0.java
+  # https://github.com/netty/netty/issues/12265
+  OPTS="$OPTS --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
+  # netty.DnsResolverUtil
+  OPTS="$OPTS --add-opens java.base/sun.net=ALL-UNNAMED"
+  # JvmDefaultGCMetricsLogger & MBeanStatsGenerator
+  OPTS="$OPTS --add-opens java.management/sun.management=ALL-UNNAMED"
+  # MBeanStatsGenerator
+  OPTS="$OPTS --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED"
+  # LinuxInfoUtils
+  OPTS="$OPTS --add-opens java.base/jdk.internal.platform=ALL-UNNAMED"
+fi
+
+OPTS="${OPTS} -Dlog4j.configurationFile=${LOG_FILE}"
+
+OPTS="$OPTS $LAKEHOUSE_MEM $LAKEHOUSE_GC $LAKEHOUSE_GC_LOG $LAKEHOUSE_EXTRA_OPTS"
+
+# get arguments
+COMMAND="$1"
+
+exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceProducer "$@"
