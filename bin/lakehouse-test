@@ -5,6 +5,7 @@ LAKEHOUSE_HOME=`cd $(dirname $0)/..; pwd`
 LIB_DIR=${LAKEHOUSE_HOME}/lib
 CONF_DIR=${LAKEHOUSE_HOME}/conf
 LOG_FILE=${CONF_DIR}/log4j2.properties
+LAKEHOUSE_LOG_DIR=${LAKEHOUSE_LOG_DIR:-"${LAKEHOUSE_HOME}/logs"}
 
 # Check for the java to use
 if [[ -z $JAVA_HOME ]]; then
@@ -18,9 +19,10 @@ else
 fi
 
 # Check ar env and load ar_env.sh
-if [[ -f "$LAKEHOUSE_HOME/conf/lakehouse_env.sh" ]]
+echo "$LAKEHOUSE_HOME/conf/lakehouse-env.sh"
+if [ -f "$LAKEHOUSE_HOME/conf/lakehouse-env.sh" ];
 then
-    . "$LAKEHOUSE_HOME/conf/lakehouse_env.sh"
+    . "$LAKEHOUSE_HOME/conf/lakehouse-env.sh"
 fi
 
 add_maven_deps_to_classpath() {
@@ -74,7 +76,43 @@ OPTS="${OPTS} -Dlog4j.configurationFile=${LOG_FILE}"
 
 OPTS="$OPTS $LAKEHOUSE_MEM $LAKEHOUSE_GC $LAKEHOUSE_GC_LOG $LAKEHOUSE_EXTRA_OPTS"
 
-# get arguments
-COMMAND="$1"
+lakehouse_help() {
+    cat <<EOF
+Usage: pulsar-perf <command>
+where command is one of:
+    produce                 Run a producer
+    consume                 Run a consumer
 
-exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceProducer "$@"
+    help                    This help message
+
+or command is the full name of a class with a defined main() method.
+
+Environment variables:
+   LAKEHOUSE_LOG_CONF               Log4j configuration file (default $DEFAULT_LOG_CONF)
+   LAKEHOUSE_EXTRA_OPTS             Extra options to be passed to the jvm
+   LAKEHOUSE_EXTRA_CLASSPATH        Add extra paths to the pulsar classpath
+
+These variable can also be set in conf/lakehouse_env.sh
+EOF
+}
+
+cd "$LAKEHOUSE_HOME"
+
+# if no args specified, show usage
+if [ $# = 0 ]; then
+    lakehouse_help;
+    exit 1;
+fi
+
+# get arguments
+COMMAND=$1
+shift
+
+
+if [ "$COMMAND" == "produce" ]; then
+    exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceProducer "$@"
+elif [ "$COMMAND" == "consume" ]; then
+    exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceConsumer "$@"
+else
+    pulsar_help;
+fi
