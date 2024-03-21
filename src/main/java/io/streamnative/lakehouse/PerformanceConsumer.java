@@ -8,10 +8,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminBuilder;
@@ -154,6 +152,7 @@ public class PerformanceConsumer {
                 break;
             }
 
+            log.info("Start new one round of consuming messages ...");
             for (Consumer<Person> consumer : consumers) {
                 if (arguments.testTime > 0 && System.nanoTime() > testEndTime) {
                     log.info("------------- DONE (reached the maximum duration: [{} seconds] of consumption) "
@@ -192,7 +191,7 @@ public class PerformanceConsumer {
             stats.cursors.get(OFFLOAD_CURSOR);
         String offloadMarkDeletePosition =
             offloadCursorStats != null ? offloadCursorStats.markDeletePosition : null;
-        long markDeletePositionLedger =
+        long offloadMarkDeletePositionLedger =
             offloadMarkDeletePosition != null
                 ? Long.parseLong(offloadMarkDeletePosition.split(":")[0])
                 : -1L;
@@ -220,10 +219,7 @@ public class PerformanceConsumer {
         // lastLedgerId = 11
         // lastConfirmedEntry = 10:100
         if (stats.ledgers.isEmpty()
-            || (readPositionLedger > latestOffloadedLedgerId.get()
-            && lastLedgerId > readPositionLedger
-            && lastLedgerId != markDeletePositionLedger
-            && !Objects.equals(stats.lastConfirmedEntry, offloadMarkDeletePosition))) {
+            || readPositionLedger > latestOffloadedLedgerId.get()) {
             log.info(
                 "Reached the latest offloaded ledger, skip this topic: {} "
                     + "readPosition: {}, offloadMarkDeletePosition: {}, lastConfirmedEntry: {}",
@@ -256,8 +252,7 @@ public class PerformanceConsumer {
             log.info("[{}] Received messageId: {}, data: {}", topic, msg.getMessageId(), msg.getValue());
             consumer.acknowledge(msg);
 
-            if (((MessageIdImpl) msg.getMessageId()).getLedgerId() > latestOffloadedLedgerId.get()
-                && compareTo(stats.lastConfirmedEntry, offloadCursorStats.readPosition) >= 0) {
+            if (((MessageIdImpl) msg.getMessageId()).getLedgerId() > latestOffloadedLedgerId.get()) {
                 log.info(
                     "Reached the latest offloaded ledger, stop consuming. msgId: {}, "
                         + "lastConfirmedEntry: {}, readPosition: {}",
