@@ -108,11 +108,18 @@ fi
 COMMAND=$1
 shift
 
+if [ ! -d "$LAKEHOUSE_LOG_DIR" ]; then
+  mkdir -p "$LAKEHOUSE_LOG_DIR"
+fi
 
 if [ "$COMMAND" == "produce" ]; then
     exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceProducer "$@"
 elif [ "$COMMAND" == "consume" ]; then
     exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceConsumer "$@"
+elif [ "$COMMAND" == "consume_no_admin" ]; then
+    exec ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.PerformanceConsumerWithoutAdmin "$@"
+elif [ "$COMMAND" == "produce_amazon" ]; then
+    exec  ${JAVA} -cp ${CLASSPATH} ${OPTS} io.streamnative.lakehouse.AmazonReviewProducer "$@"
 else
     pulsar_help;
 fi

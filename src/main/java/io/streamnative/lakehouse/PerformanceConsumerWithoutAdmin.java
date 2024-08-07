@@ -6,13 +6,9 @@ import com.beust.jcommander.ParameterException;
 import com.beust.jcommander.Parameters;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.pulsar.client.admin.PulsarAdmin;
-import org.apache.pulsar.client.admin.PulsarAdminBuilder;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
@@ -21,13 +17,10 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
 import org.apache.pulsar.client.api.SubscriptionType;
-import org.apache.pulsar.client.impl.MessageIdImpl;
-import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
-import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.shade.com.google.common.util.concurrent.RateLimiter;
 
 @Slf4j
-public class PerformanceConsumer {
+public class PerformanceConsumerWithoutAdmin {
     private static final String OFFLOAD_CURSOR = "__OFFLOAD";
     private static final int CONSUMER_TIMEOUT = 120_000;
 
@@ -49,8 +42,6 @@ public class PerformanceConsumer {
         boolean help;
         @Parameter(names = {"-u", "--service-url"}, description = "Pulsar Service URL")
         public String serviceURL;
-        @Parameter(names = {"-w", "--web-service-url"}, description = "Pulsar Web Service URL")
-        public String webServiceURL;
         @Parameter(description = "persistent://prop/ns/my-topic", required = true)
         public List<String> topics;
         @Parameter(names = {"--separator"}, description = "Separator between the topic and topic number")
@@ -113,15 +104,12 @@ public class PerformanceConsumer {
             rateLimiter = RateLimiter.create(arguments.msgRate);
         }
         ClientBuilder builder = PulsarClient.builder().serviceUrl(arguments.serviceURL);
-        PulsarAdminBuilder adminBuilder = PulsarAdmin.builder().serviceHttpUrl(arguments.webServiceURL);
 
         if (arguments.authPluginClassName != null) {
             builder.authentication(arguments.authPluginClassName, arguments.authParams);
-            adminBuilder.authentication(arguments.authPluginClassName, arguments.authParams);
         }
 
         PulsarClient client = builder.build();
-        PulsarAdmin admin = adminBuilder.build();
         List<Consumer<Person>> consumers = new ArrayList<>();
 
         List<String> partitionedTopics = arguments.topics.stream()
@@ -163,7 +151,7 @@ public class PerformanceConsumer {
                     break;
                 }
 
-                consumeOneTopic(admin, consumer, rateLimiter);
+                consumeOneTopic(consumer, rateLimiter);
             }
         }
 
@@ -176,65 +164,14 @@ public class PerformanceConsumer {
             }
         });
         client.close();
-        admin.close();
     }
 
 
-    public static void consumeOneTopic(PulsarAdmin admin,
-                                Consumer<Person> consumer,
+    public static void consumeOneTopic(Consumer<Person> consumer,
                                 RateLimiter rateLimiter) throws Exception {
         String topic = consumer.getTopic();
         log.info("Start to consume messages from topic {} ...", topic);
-        PersistentTopicInternalStats stats = admin.topics().getInternalStats(topic);
 
-        ManagedLedgerInternalStats.CursorStats offloadCursorStats =
-            stats.cursors.get(OFFLOAD_CURSOR);
-        String offloadMarkDeletePosition =
-            offloadCursorStats != null ? offloadCursorStats.markDeletePosition : null;
-        long offloadMarkDeletePositionLedger =
-            offloadMarkDeletePosition != null
-                ? Long.parseLong(offloadMarkDeletePosition.split(":")[0])
-                : -1L;
-        ManagedLedgerInternalStats.CursorStats consumerCursorStats =
-            stats.cursors.get(consumer.getSubscription());
-        long readPositionLedger =
-            consumerCursorStats != null
-                ? Long.parseLong(consumerCursorStats.readPosition.split(":")[0])
-                : -1L;
-        AtomicLong latestOffloadedLedgerId = new AtomicLong(-1L);
-        stats.ledgers.stream()
-            .filter(ledgerInfo -> ledgerInfo.offloaded)
-            .map(ledgerInfo -> ledgerInfo.ledgerId)
-            .max(Comparator.naturalOrder())
-            .ifPresent(latestOffloadedLedgerId::set);
-
-        long lastLedgerId =
-            !stats.ledgers.isEmpty() ? stats.ledgers.get(stats.ledgers.size() - 1).ledgerId : -1;
-
-        //[0-off, 2-off, 4-off, 5-off, 7-off, 10, 11]
-        // readPositionLedger = 10
-        // __OFFLOAD markDelete: 7:1999
-        // __OFFLOAD readPosition: 10:100
-        // latestOffloadedLedgerId = 7
-        // lastLedgerId = 11
-        // lastConfirmedEntry = 10:100
-        if (stats.ledgers.isEmpty()
-            || readPositionLedger > latestOffloadedLedgerId.get()) {
-            log.info(
-                "Reached the latest offloaded ledger, skip this topic: {} "
-                    + "readPosition: {}, offloadMarkDeletePosition: {}, lastConfirmedEntry: {}",
-                topic,
-                consumerCursorStats != null ? consumerCursorStats.readPosition : null,
-                offloadMarkDeletePosition,
-                stats.lastConfirmedEntry);
-            Thread.sleep(10 * 1000);
-            return;
-        }
-
-        // TODO Check if the consumer reaches the end of the topic
-
-        // start to consume messages from the offload topic
-        admin.topics().unload(topic);
         while (true) {
             if (rateLimiter != null) {
                 rateLimiter.acquire();
@@ -251,35 +188,7 @@ public class PerformanceConsumer {
 
             log.info("[{}] Received messageId: {}, data: {}", topic, msg.getMessageId(), msg.getValue());
             consumer.acknowledge(msg);
-
-            if (latestOffloadedLedgerId.get() == -1
-                ||((MessageIdImpl) msg.getMessageId()).getLedgerId() > latestOffloadedLedgerId.get()) {
-                log.info(
-                    "Reached the latest offloaded ledger, stop consuming. msgId: {}, "
-                        + "lastConfirmedEntry: {}, readPosition: {}",
-                    msg.getMessageId(),
-                    stats.lastConfirmedEntry,
-                    offloadCursorStats.readPosition);
-                admin.topics().triggerOffload(topic, msg.getMessageId());
-                break;
-            }
         }
-    }
-
-    private static int compareTo(String lastConfirmedEntry, String readPosition) {
-        String[] lastConfirmedEntryParts = lastConfirmedEntry.split(":");
-        String[] readPositionParts = readPosition.split(":");
-        if (lastConfirmedEntryParts.length != 2 || readPositionParts.length != 2) {
-            return -1;
-        }
-        int ledgerCompare =
-            Long.compare(
-                Long.parseLong(lastConfirmedEntryParts[0]), Long.parseLong(readPositionParts[0]));
-        if (ledgerCompare != 0) {
-            return ledgerCompare;
-        }
-        return Long.compare(
-            Long.parseLong(lastConfirmedEntryParts[1]), Long.parseLong(readPositionParts[1]));
     }
 }
 
