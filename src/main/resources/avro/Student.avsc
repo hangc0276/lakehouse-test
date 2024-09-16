@@ -1,0 +1,12 @@
+{
+  "namespace": "io.streamnative.tieredstorage.test",
+  "type": "record",
+  "name": "Student",
+  "fields": [
+    {"name": "name", "type": "string"},
+    {"name": "age", "type": "int"},
+    {"name": "payload", "type":  "string"},
+    {"name": "address", "type":  "string"},
+    {"name": "number", "type":  "long"}
+  ]
+}
